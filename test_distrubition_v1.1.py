@@ -52,7 +52,7 @@ def movavg(result, window):
 		#window must be an odd number
 		if window % 2 == 0:
 				window += 1
-				print 'Interval for moving average should be an odd number. Window += 1'
+				#print 'Interval for moving average should be an odd number. Window += 1'
 		weights = np.ones(window) / window
 		ma = np.convolve(weights, result, mode='valid')
 		zeros = np.zeros(np.rint((window-1)/2))
@@ -66,7 +66,7 @@ def movstd(ma, window):
 		#window must be an odd number
 		if window % 2 == 0:
 				window += 1
-				print 'Interval for moving standard deviation should be an odd number. window += 1'
+				#print 'Interval for moving standard deviation should be an odd number. window += 1'
 		std = np.zeros(len(ma))
 		for index in range(window - 1, len(ma) - window + 1):
 				std[index] = np.std(ma[index - (window-1)/2: index + (window-1)/2 + 1])
@@ -91,16 +91,17 @@ def findmaxstd(std, window, precentage):
 		#window must be an odd number
 		if window % 2 == 0:
 				window += 1
-				print 'Interval for finding max for moving standard deviation should be an odd number. window += 1'
+				#print 'Interval for finding max for moving standard deviation should be an odd number. window += 1'
 		findmaxstdzeros = np.zeros(window - 1)
 		findmaxstddiff = np.diff(std[np.nonzero(std)[0]])
 		findmaxstddiffwhole = np.hstack((findmaxstdzeros, findmaxstddiff, findmaxstdzeros))
 		fig, ax = plt.subplots(1)
 		ppl.plot(np.arange(len(findmaxstddiffwhole)), findmaxstddiffwhole)
+		ppl.plot(np.arange(len(findmaxstddiffwhole)), [0] * len(findmaxstddiffwhole))
+
 		fig.savefig(pathfilename + '_window_' + str(interval) + '_diff_' + '.png',dpi=500)
 		plt.close()
-		print pathfilename + '_window_' + str(interval) + '_diff_' + '.png'
-		sys.exit(0)
+
 
 		#One index number is lost due to differentiation
 		#Clean the zeros and add them again to prevent the huge change between
@@ -296,6 +297,65 @@ def plotpopendiff(filename, result, peak, popendiffstdamp):
 		plt.close()
 		print savefilename, 'Popen and calculated Popen plot saved.'
 
+def determinse(result, precentage):
+		attempt = np.zeros(20)
+		count = 0
+		interval = 101
+		firstpeak = np.array([])
+		lastpeak = np.array([])
+		while count < 10:
+				interval += 3
+				print 'testing interval:', interval,
+				ma = movavg(result, interval)
+				std = movstd(ma, interval)
+				oripeak, oristdamp = findmaxstd(std, interval, precentage)
+				peaklength = np.append(oripeak, len(result)-1) - np.append(0, oripeak)
+
+				if np.amin(peaklength) > interval:
+						count += 1
+						print 'Succeed.', str(count), 'out of 10.'
+						attempt = np.append(attempt, 1)
+				else:
+						count = 0
+						print 'failed.'
+						attempt = np.append(attempt, 0)
+
+				judge = np.sum(attempt[-15:])
+				print 'Success rate:', str(judge), 'out of 15.'
+				if judge > 11:
+						print 'successful rate exceeded 0.8.'
+						count = 100
+
+				firstpeak = np.append(firstpeak, oripeak[0])
+				lastpeak = np.append(lastpeak, oripeak[-1])
+
+		if count == 10:
+				start = interval - 27
+				first = np.amin(firstpeak[-10:])
+				last = int((len(result) - 1 - np.amax(lastpeak[-10:]))/2)
+				end = np.amin(np.append(first, last))
+		elif count == 100:
+				startindex = -(15 - np.where(attempt[-15:] == 1)[0][0])
+				start = interval + startindex * 3 +3
+				first = np.amin(firstpeak[startindex:])
+				last = int((len(result) - 1 - np.amax(lastpeak[startindex:]))/2)
+				end = np.amin(np.append(first, last))
+
+		if end > 800:
+				end = 800
+		print 'Interval: starting point', str(start), 'ending point', str(end)
+
+		if (end - start) / 3 < 20:
+				if end < 500:
+						print 'WARNING: Some points may be lost because it is too close to the start or the end.'
+				if start > 500:
+						print 'WARNING: Model change is too frequent. The analysis may not be very accurate.'
+				print 'The end of test will be manually set as', str(start + 300)
+				step = np.arange(start, start + 303, 6)
+		else:
+				step = np.linspace(start, end, 50)
+		return step.astype(np.int64)
+
 sysinput = sys.argv
 
 inputfilename = lambda x: x[-4:] == '.csv'
@@ -318,7 +378,16 @@ else:
 saveoriginal = lambda x: x == 'saveoriginal'
 saveoriginalplot = filter(saveoriginal, sysinput)
 
-precentage = 0.25
+
+adjustprecentage = lambda x: x[-1] == '%'
+precent = filter(adjustprecentage, sysinput)
+
+if precent != []:
+		precentage = float(precent[0][:-1]) / 100
+		print 'precentage input detected. precentage = ', precentage
+else:
+		precentage = 0.45
+		print 'precentage input not detected. precentage = 0.45'
 
 for filename in filenamelist:
 		start, end, amp, dwell = np.loadtxt(filename, delimiter=',',usecols=(4,5,6,8),unpack=True)
@@ -334,10 +403,21 @@ for filename in filenamelist:
 
 		result = convert(dwell)
 		#Convert the result to a series of ones and zeros
+		print 'Start finding the start point.'
+
+		if os.path.exists(pathfilename+'step.npy') == False:
+				step = determinse(result, precentage)
+				np.save(pathfilename+'step.npy', step)
+		else:
+				print 'Existing calculation for interval found. Loading'
+				step = np.load(pathfilename+'step.npy')
+				step = step.astype(np.int64)
+				print 'Interval: starting point', str(step[0]), 'ending point', str(step[-1])
 
 		totalpeak = np.array([])
-		failedcurvefit = np.array([])
-		for interval in range(101,501,50):
+		totalinterval = np.array([])
+		count = 1
+		for interval in step:
 				print 'interval:', interval
 				ma = movavg(result, interval)
 				#Calculate the moving average of the result
@@ -364,8 +444,6 @@ for filename in filenamelist:
 						#Just to calculate the Popen difference from a more accurate peak time
 						#The data obtained seems to be the same
 
-
-
 						while np.any(oripopendiffstdamp > (1.5 * oripopendiffpeak)):
 								filterpeak = np.array([])
 								filterpopendiffpeak = np.array([])
@@ -377,14 +455,26 @@ for filename in filenamelist:
 								oripopendiffstdamp = filterpopendiffpeak
 								oripopendiffpeak = popendiffpeak(result, oripeak)
 
-
+						totalpeak = np.append(totalpeak, oripeak)
+						totalinterval = np.append(totalinterval, [interval] * len(oripeak))
 
 
 						for iprint in range(len(oripeak)):
 								print 'peak', oripeak[iprint], 'Popen(avg)', oripopendiffpeak[iprint], 'Popen(std)', oripopendiffstdamp[iprint]
 
-						plotorifit(savefilename, std, oripeak, oripopendiffstdamp, interval, precentage)
-						plotpopendiff(savefilename, result, oripeak, oripopendiffstdamp)
+						if count == 10:
+								#plotorifit(savefilename, std, oripeak, oripopendiffstdamp, interval, precentage)
+								plotpopendiff(savefilename, result, oripeak, oripopendiffstdamp)
+								count = 0
+						count += 1
+
+		fig, ax = plt.subplots(1)
+		ppl.scatter(ax, totalpeak, totalinterval)
+		ax.set_title(savefilename + ' Heterogeneity distrubition Start:')
+		fig.savefig(pathfilename + '_Heterogeneity_distrubition' + '.png',dpi=500)
+		plt.close()
+		print 'Saved scatter plot:' + savefilename
+
 
 
 
