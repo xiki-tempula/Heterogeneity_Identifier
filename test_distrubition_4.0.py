@@ -182,8 +182,6 @@ def calculatepeak(step, jump, dwell):
 			oripopendiffpeak = calpopendiffpeak(dwell, oripeak)
 			#Calculate the difference in Popen from the raw data using the time of the peak
 			filterpeak, oripopendiffstdamp, oripopendiffpeak = filterpeaktime(dwell, std, oripeak, oripopendiffstdamp, oripopendiffpeak)
-			
-			filterpeak, oripopendiffstdamp, oripopendiffpeak = filterpopendiff(filterpeak, oripopendiffstdamp, oripopendiffpeak, popendifflimit)
 
 			totalpeak = np.append(totalpeak, oripeak)
 			totalinterval = np.append(totalinterval, [interval] * len(oripeak))
@@ -275,17 +273,11 @@ def popenpeak(dwell, peak):
 		popen = np.append(popen, temp)
 	return popen
 
-def filterpopendiff(peak, popendiffstdamp, popendiffpeak, popendifflimit):
-	delete = np.where(popendiffstdamp < popendifflimit)[0]
+def filterpopendiff(peak, dwell, popendifflimit):
+	popen = popenpeak(dwell, peak)
+	delete = np.where(popen < popendifflimit)[0]
 	peak = np.delete(peak, delete)
-	popendiffstdamp = np.delete(popendiffstdamp, delete)
-	popendiffpeak = np.delete(popendiffpeak, delete)
-
-	delete = np.where(popendiffpeak < popendifflimit)[0]
-	peak = np.delete(peak, delete)
-	popendiffstdamp = np.delete(popendiffstdamp, delete)
-	popendiffpeak = np.delete(popendiffpeak, delete)
-	return peak, popendiffstdamp, popendiffpeak
+	return peak
 
 
 
@@ -342,7 +334,7 @@ for filename in filenamelist:
 	jump = 0.25
 	start = 10.25
 	end = 50.25
-	popendifflimit = 0.1
+	popendifflimit = 0.05
 	if os.path.exists(pathfilename+'step.npy') == False:
 		processlist = np.array_split(np.arange(start,end,jump*2), multiprocessing.cpu_count())
 
@@ -554,8 +546,11 @@ for filename in filenamelist:
 	csvpeak = np.array([])
 	split = np.hstack((0, np.where(sortsumpeakdiff>limit)[0] + 1, len(sortsumpeak)))
 	for index in np.arange(len(split)-1):
-		csvpeak = np.append(csvpeak, np.mean(sortsumpeak[split[index]: split[index + 1]]))
-		csvpeak = csvpeak.astype(np.int64)
+		if (split[index + 1] - split[index]) > 10:
+			csvpeak = np.append(csvpeak, np.mean(sortsumpeak[split[index]: split[index + 1]]))
+	csvpeak = csvpeak.astype(np.int64)
+
+	csvpeak = filterpopendiff(csvpeak, dwell, popendifflimit)
 
 	peak = csvpeak.copy()
 	start, end, amp, dwell = np.loadtxt(filename, delimiter=',',usecols=(4,5,6,8),unpack=True)
