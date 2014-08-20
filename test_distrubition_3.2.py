@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from scipy import optimize, signal
 import copy
 import multiprocessing
+import matplotlib as mpl
+
 
 def originalplot(pathfilename, savefilename, amp, dwell):
 	originaldata = convertoriginal(amp, dwell)
@@ -106,6 +108,38 @@ def determine_step_process(dwell, percentage, start, end, jump):
 	#This step makes sure that the moving average sequence is as long as the original one.
 	return ma'''
 
+def findmax_std(std, window, percentage):
+	#window must be an odd number
+	if window % 2 == 0:
+		window += 1
+		#print 'Interval for finding max for moving standard deviation should be an odd number. window += 1'
+	findmaxstd_zeros = np.zeros(window - 1)
+	findmaxstd_diff = np.diff(std[np.nonzero(std)[0]])
+	findmaxstd_whole = np.hstack((findmaxstd_zeros, findmaxstd_diff, findmaxstd_zeros))
+	#fig, ax = plt.subplots(1)
+	#ppl.plot(np.arange(len(findmaxstddiffwhole)), findmaxstddiffwhole)
+	#ppl.plot(np.arange(len(findmaxstddiffwhole)), [0] * len(findmaxstddiffwhole))
+	#fig.savefig(pathfilename + '_window_' + str(window) + '_diff_' + '.png',dpi=500)
+	#plt.close()
+
+	#One index number is lost due to differentiation
+	#Clean the zeros and add them again to prevent the huge change between
+	#the last zero and the first standard deviation
+
+	peak = np.array([])
+	stdamp = np.array([])
+	for check in np.arange(window - 1, len(findmaxstd_whole) - (window - 1)):
+		firsthalf = np.all(findmaxstd_whole[check - (window-1)*percentage: check] > 0)
+		secondhalf = np.all(findmaxstd_whole[check: check + (window - 1)*percentage +1] <= 0)
+		#Compensate for the loss of one number due to the differentiation
+		if (firsthalf & secondhalf):
+			if std[check] != 0:
+			#I don't know why I need to do this but this can prevent some weird situations.
+				peak = np.append(peak, check)
+				stdamp = np.append(stdamp, std[check])
+	peak = peak.astype(int)
+	return peak, stdamp
+
 def movstd(ma, interval):
 	std = np.zeros(len(ma))
 	for index in np.arange(interval - 1, len(ma) - (interval - 1)):
@@ -114,10 +148,13 @@ def movstd(ma, interval):
 	return std
 
 def calculatepeak(step, jump, dwell):
+	totalstd = []
 	totalpeak = np.array([])
 	totalinterval = np.array([])
 	totalfilterpeak = np.array([])
 	totalfilterinterval = np.array([])
+	#totalfilterpopen = np.array([])
+	#totalfilterpopeninterval = np.array([])
 	for window in step:
 		if window/jump % 2 == 0:
 			window += jump
@@ -128,25 +165,42 @@ def calculatepeak(step, jump, dwell):
 		#Calculate the moving standard deviation of the result
 		oripeak = signal.find_peaks_cwt(std, np.arange(interval * percentage, interval, interval*0.05))
 		oristdamp = std[oripeak]
+		#oripeak, oristdamp = findmax_std(std, interval, percentage)
 		#Obtain the standard deviation peak and the amplitude of the peak
 
 		if len(oripeak) == 0:
 			pass
 		else:
-			oripopendiffpeak = calpopendiffpeak(dwell, oripeak)
-			#Calculate the difference in Popen from the raw data using the time of the peak
+			if totalstd == []:
+				totalstd = std
+			else:
+				totalstd = np.vstack((totalstd, std))
+
 			oripopendiffstdamp = oristdamp / np.sqrt(1.0/12)
 			#Calculate the difference in Popen based on the value of the standard deviation peak
-			filterpeak, oripopendiffstdamp, oripopendiffpeak = filterpeaktime(dwell, std, oripeak, oripopendiffstdamp, oripopendiffpeak)
+			#filterpopen, oripopendiffstdamp = filterpopendiff(oripeak, oripopendiffstdamp, popendifflimit)
+			oripopendiffpeak = calpopendiffpeak(dwell, oripeak)
+			#Calculate the difference in Popen from the raw data using the time of the peak
+			oripeak, oripopendiffstdamp, oripopendiffpeak = filterpeaktime(dwell, std, oripeak, oripopendiffstdamp, oripopendiffpeak)
+
+			oripeak, oripopendiffstdamp, oripopendiffpeak = filterpopendiff(oripeak, oripopendiffstdamp, oripopendiffpeak, popendifflimit)
 
 			totalpeak = np.append(totalpeak, oripeak)
 			totalinterval = np.append(totalinterval, [interval] * len(oripeak))
 			totalfilterpeak = np.append(totalfilterpeak, filterpeak)
 			totalfilterinterval = np.append(totalfilterinterval, [interval] * len(filterpeak))
+			#totalfilterpopen = np.append(totalfilterpopen, filterpopen)
+			#totalfilterpopeninterval = np.append(totalfilterpopeninterval, [interval] * len(filterpopen))
+			print 'window', window
 			for iprint in range(len(filterpeak)):
-				print 'peak', filterpeak[iprint], 'Popen(avg)', oripopendiffpeak[iprint], 'Popen(std)', oripopendiffstdamp[iprint]
+				print 'peak', filterpeak[iprint] * jump, 'Popen(avg)', oripopendiffpeak[iprint], 'Popen(std)', oripopendiffstdamp[iprint]
 
-	np.savez(pathfilename+str(step[0])+'_'+str(step[-1]), totalpeak=totalpeak, totalinterval=totalinterval, totalfilterpeak=totalfilterpeak, totalfilterinterval=totalfilterinterval)
+	np.savez(pathfilename+str(step[0])+'_'+str(step[-1]),
+	totalpeak=totalpeak,
+	totalinterval=totalinterval,
+	totalfilterpeak=totalfilterpeak,
+	totalfilterinterval=totalfilterinterval,
+	totalstd=totalstd)
 
 def calculatepopen(dwell, start, end, jump):
 	cumsum = np.cumsum(dwell)/jump
@@ -160,10 +214,7 @@ def calculatepopen(dwell, start, end, jump):
 	else:
 		time += cumsum[startindex] - start
 
-	print cumsum
-	print end
-	endindex = np.where(cumsum > end)[0][0]
-	print cumsum
+	endindex = np.where(cumsum >= end)[0][0]
 	if endindex % 2 == 0:
 		opentime += end - cumsum[endindex - 1]
 		time += end - cumsum[endindex - 1]
@@ -191,16 +242,29 @@ def calpopendiffpeak(dwell, peak):
 	return popendiff
 
 def filterpeaktime(dwell, std, peak, popendiffstdamp, popendiffpeak):
-	delete = np.nan
-	while np.any(popendiffstdamp > (1.5 * popendiffpeak)):
-		for index in range(len(peak)):
-			if popendiffstdamp[index] > (1.5 * popendiffpeak[index]):
-				delete = index
-		if delete != np.nan:
-			peak = np.delete(peak, delete)
-			delete = np.nan
-			popendiffpeak = calpopendiffpeak(dwell, peak)
-			popendiffstdamp = std[peak]
+	for i in [1.7]:
+		delete = np.nan
+		while np.any(popendiffstdamp > (i * popendiffpeak)):
+			for index in range(len(peak)):
+				if popendiffstdamp[index] > (i * popendiffpeak[index]):
+					delete = index
+			if delete != np.nan:
+				peak = np.delete(peak, delete)
+				delete = np.nan
+				popendiffpeak = calpopendiffpeak(dwell, peak)
+				popendiffstdamp = std[peak] / np.sqrt(1.0/12)
+
+	for i in [0.7]:
+		delete = np.nan
+		while np.any(popendiffstdamp < (i * popendiffpeak)):
+			for index in range(len(peak)):
+				if popendiffstdamp[index] < (i * popendiffpeak[index]):
+					delete = index
+			if delete != np.nan:
+				peak = np.delete(peak, delete)
+				delete = np.nan
+				popendiffpeak = calpopendiffpeak(dwell, peak)
+				popendiffstdamp = std[peak] / np.sqrt(1.0/12)
 	return peak, popendiffstdamp, popendiffpeak
 
 def popenpeak(dwell, peak):
@@ -210,6 +274,20 @@ def popenpeak(dwell, peak):
 		temp = calculatepopen(dwell, calpeak[index], calpeak[index + 1], jump)
 		popen = np.append(popen, temp)
 	return popen
+
+def filterpopendiff(peak, popendiffstdamp, popendiffpeak, popendifflimit):
+	delete = np.where(popendiffstdamp < popendifflimit)[0]
+	peak = np.delete(peak, delete)
+	popendiffstdamp = np.delete(popendiffstdamp, delete)
+	popendiffpeak = np.delete(popendiffpeak, delete)
+
+	delete = np.where(popendiffpeak < popendifflimit)[0]
+	peak = np.delete(peak, delete)
+	popendiffstdamp = np.delete(popendiffstdamp, delete)
+	popendiffpeak = np.delete(popendiffpeak, delete)
+	return peak, popendiffstdamp, popendiffpeak
+
+
 
 sysinput = sys.argv
 
@@ -262,8 +340,9 @@ for filename in filenamelist:
 	print 'Start finding the start point.'
 
 	jump = 0.25
-	start = 20.25
+	start = 10.25
 	end = 50.25
+	popendifflimit = 0.1
 	if os.path.exists(pathfilename+'step.npy') == False:
 		processlist = np.array_split(np.arange(start,end,jump*2), multiprocessing.cpu_count())
 
@@ -336,7 +415,7 @@ for filename in filenamelist:
 			for time in processlist[1:]:
 				loaddata = pathfilename+'_'+str(time[0])+'_'+str(time[-1])+'.npz'
 				attempt = np.append(attempt, np.load(loaddata)['attempt'])
-				suminterval = np.append(window, np.load(loaddata)['suminterval'])
+				suminterval = np.append(suminterval, np.load(loaddata)['suminterval'])
 				firstpeak = np.append(firstpeak, np.load(loaddata)['firstpeak'])
 				lastpeak = np.append(lastpeak, np.load(loaddata)['lastpeak'])
 				os.remove(loaddata)
@@ -349,6 +428,7 @@ for filename in filenamelist:
 				fifteen = np.where(filterfifteen == 0.8)[0][0]
 				startindex = np.where(attempt[fifteen: fifteen+15] == 1)[0][0] + fifteen
 				endindex = np.where(attempt[fifteen: fifteen+15] == 1)[0][-1] + fifteen
+
 				if suminterval[ten] <= suminterval[startindex]:
 					start = suminterval[ten]
 					first = np.amin(firstpeak[ten: ten+10])
@@ -415,7 +495,9 @@ for filename in filenamelist:
 	suminterval = np.array([])
 	sumfilterpeak = np.array([])
 	sumfilterinterval = np.array([])
-
+	totalstd = []
+	#sumfilterpopen = np.array([])
+	#sumfilterpopeninterval = np.array([])
 	for time in processlist:
 		time = time.astype(int)
 		loaddata = pathfilename+str(time[0])+'_'+str(time[-1])+'.npz'
@@ -423,13 +505,34 @@ for filename in filenamelist:
 		suminterval = np.append(suminterval, np.load(loaddata)['totalinterval'])
 		sumfilterpeak = np.append(sumfilterpeak, np.load(loaddata)['totalfilterpeak'])
 		sumfilterinterval = np.append(sumfilterinterval, np.load(loaddata)['totalfilterinterval'])
+		#sumfilterpopen = np.append(sumfilterpopen, np.load(loaddata)['totalfilterpopen'])
+		#sumfilterpopeninterval = np.append(sumfilterpopeninterval, np.load(loaddata)['totalfilterpopeninterval'])
+		if totalstd == []:
+			totalstd = np.load(loaddata)['totalstd']
+		else:
+			totalstd = np.vstack((totalstd, np.load(loaddata)['totalstd']))
 		os.remove(loaddata)
 
-	fig, ax = plt.subplots(1)
-	ppl.scatter(ax, sumpeak, suminterval)
-	ppl.scatter(ax, sumfilterpeak, sumfilterinterval)
+	'''fig, ax = plt.subplots(1)
+	ppl.scatter(ax, sumpeak, suminterval*jump)
+	ppl.scatter(ax, sumfilterpeak, sumfilterinterval*jump)
+	ax.set_xlim(0, len(totalstd[0]))
+	ax.set_ylim(min(suminterval*jump), max(suminterval*jump))
 	ax.set_title(savefilename + ' Heterogeneity distrubition')
-	fig.savefig(pathfilename + '_Heterogeneity_distrubition' + '.png',dpi=300)
+	fig.savefig(pathfilename + '_Heterogeneity_distrubition' + '.png',dpi=300, transparent = True)
+	plt.close()
+	print 'Saved scatter plot:', savefilename'''
+
+
+	plt.pcolormesh(np.arange(len(totalstd[0]))*jump, step, totalstd, cmap=mpl.cm.Reds)
+	plt.scatter(sumpeak*jump, suminterval*jump, c= 'y')
+	#plt.scatter(sumfilterpopen*jump, sumfilterpopeninterval*jump, c='b')
+	plt.scatter(sumfilterpeak*jump, sumfilterinterval*jump, c ='g')
+
+	plt.xlim(0, len(totalstd[0])*jump)
+	plt.ylim(step[0], step[-1])
+	plt.title(savefilename + ' Heterogeneity distrubition')
+	plt.savefig(pathfilename + '_Heterogeneity_distrubition' + '.png',dpi=300)
 	plt.close()
 	print 'Saved scatter plot:', savefilename
 
@@ -455,7 +558,7 @@ for filename in filenamelist:
 		csvpeak = csvpeak.astype(np.int64)
 
 	peak = csvpeak.copy()
-	start = np.loadtxt(filename, delimiter=',',usecols=(4,),unpack=True)
+	start, end, amp, dwell = np.loadtxt(filename, delimiter=',',usecols=(4,5,6,8),unpack=True)
 	csvpeak = np.hstack((csvpeak.astype(np.int64), np.cumsum(dwell)[-1]/jump - 1))
 	popen = popenpeak(dwell, peak)
 	csvstart = np.hstack((0, peak.astype(float)))*jump + start[0]
@@ -464,12 +567,17 @@ for filename in filenamelist:
 	np.savetxt(pathfilename+'.csv', csvtext, delimiter=',')
 
 	plotpeak = np.hstack((0, peak, peak + 1, np.cumsum(dwell)[-1]/jump-1))
-	plotpeak = np.sort(plotpeak)
+	plotpeak = np.sort(plotpeak)*jump
+	#plotpeak += start[0]
 	plotpopen = np.repeat(popen, 2)
 
-	fig, ax = plt.subplots(1)
-	ppl.plot(plotpeak, plotpopen)
-	ax.set_title(savefilename + ' Popen')
-	fig.savefig(pathfilename + '_Popen.png',dpi=300)
+	plotoriamp = (np.repeat(amp, 2) - np.amin(amp)) / np.average(amp)/2
+	plotorix = np.hstack((0, np.repeat(np.cumsum(dwell)[:-1], 2), np.cumsum(dwell)[-1]))
+	plt.plot(plotorix, plotoriamp, c='black', linewidth = 0.5)
+	plt.plot(plotpeak, plotpopen, c='red')
+	plt.ylim(0, 1.2)
+	plt.xlim(0, plotorix[-1])
+	plt.title(savefilename + ' Popen')
+	plt.savefig(pathfilename + '_Popen.png',dpi=300)
 	plt.close()
 	print savefilename, 'Popen plot saved.'
