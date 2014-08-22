@@ -37,6 +37,32 @@ def convertoriginal(amp, dwell):
 			result = np.append(result, np.zeros(idwell))
 	return result'''
 
+'''def convertma(dwell, interval, jump):
+	cumsum = np.cumsum(dwell)
+	start = 0.0
+	end = interval * 1.0
+	ma = np.array([])
+	while end <= cumsum[-1]:
+		opentime = 0.0
+
+		startindex = np.where(cumsum > start)[0][0]
+		if startindex % 2 == 0:
+			opentime += cumsum[startindex] - start
+
+		endindex = np.where(cumsum > end)[0][0]
+		if endindex % 2 == 0:
+			opentime += end - cumsum[endindex - 1]
+
+		for index in range(startindex +1, endindex):
+			if index % 2 == 0:
+				opentime += dwell[index]
+
+		ma = np.append(ma, opentime / (end - start))
+		start += jump
+		end += jump
+	ma = np.hstack((np.zeros((interval-jump)/jump/2), ma, np.zeros((interval-jump)/jump/2)))
+	return ma'''
+
 def convertma(dwell, interval, jump):
 	cumsum = np.cumsum(dwell)
 	start = 0.0
@@ -44,30 +70,35 @@ def convertma(dwell, interval, jump):
 	ma = np.array([])
 	while end <= cumsum[-1]:
 		opentime = 0.0
-		time = 0.0
 
 		startindex = np.where(cumsum > start)[0][0]
 		if startindex % 2 == 0:
 			opentime += cumsum[startindex] - start
-			time += cumsum[startindex] - start
-		else:
-			time += cumsum[startindex] - start
 
 		endindex = np.where(cumsum > end)[0][0]
 		if endindex % 2 == 0:
 			opentime += end - cumsum[endindex - 1]
-			time += end - cumsum[endindex - 1]
-		else:
-			time += end - cumsum[endindex - 1]
 
 		for index in range(startindex +1, endindex):
 			if index % 2 == 0:
 				opentime += dwell[index]
-				time += dwell[index]
-			else:
-				time += dwell[index]
 
-		ma = np.append(ma, opentime / time)
+		ma = np.append(ma, opentime / (end-start)*1.0)
+
+		start += jump
+		end += jump
+	ma = np.hstack((np.zeros((interval-jump)/jump/2), ma, np.zeros((interval-jump)/jump/2)))
+	return ma
+
+def convertma(dwell, interval, jump):
+	cumsum = np.cumsum(dwell)
+	start = 0.0
+	end = interval * 1.0
+	ma = np.array([])
+	while end <= cumsum[-1]:
+		popen = calculatepopen(dwell, start/jump, end/jump, jump)
+		ma = np.append(ma, popen)
+
 		start += jump
 		end += jump
 	ma = np.hstack((np.zeros((interval-jump)/jump/2), ma, np.zeros((interval-jump)/jump/2)))
@@ -200,34 +231,48 @@ def calculatepeak(step, jump, dwell):
 	totalfilterinterval=totalfilterinterval,
 	totalstd=totalstd)
 
-def calculatepopen(dwell, start, end, jump):
+'''def calculatepopen(dwell, start, end, jump):
 	cumsum = np.cumsum(dwell)/jump
 	opentime = 0.0
-	time = 0.0
 
 	startindex = np.where(cumsum > start)[0][0]
 	if startindex % 2 == 0:
 		opentime += cumsum[startindex] - start
-		time += cumsum[startindex] - start
-	else:
-		time += cumsum[startindex] - start
 
 	endindex = np.where(cumsum >= end)[0][0]
 	if endindex % 2 == 0:
 		opentime += end - cumsum[endindex - 1]
-		time += end - cumsum[endindex - 1]
-	else:
-		time += end - cumsum[endindex - 1]
 
 	for index in range(startindex +1, endindex):
 		if index % 2 == 0:
-			opentime += dwell[index]
-			time += dwell[index]
-		else:
-			time += dwell[index]
+			opentime += dwell[index]/jump
+
+	popen = opentime/(end - start)
+	return popen'''
+
+def calculatepopen(dwell, start, end, jump):
+	popendwell = np.append(0, dwell)/jump
+	cumsum = np.cumsum(popendwell)
+	opentime = 0.0
+
+	startindex = np.where(cumsum > start)[0][0]
+	starttime = cumsum[startindex - 1] - start
+	if startindex % 2 != 0:
+		opentime += starttime
+
+	endindex = np.where(cumsum >= end)[0][0]
+	endtime = end - cumsum[endindex - 1]
+	if endindex % 2 != 0:
+		opentime += endtime
+
+	middle = (cumsum > start) & (cumsum < end)
+	opentime += np.sum(popendwell[middle & (np.arange(len(popendwell))%2 != 0)])
+	time = end - start
 
 	popen = opentime/time
+
 	return popen
+
 
 def calpopendiffpeak(dwell, peak):
 	popendiff = np.array([])
@@ -241,28 +286,21 @@ def calpopendiffpeak(dwell, peak):
 
 def filterpeaktime(dwell, std, peak, popendiffstdamp, popendiffpeak):
 	for i in [1.7]:
-		delete = np.nan
-		while np.any(popendiffstdamp > (i * popendiffpeak)):
-			for index in range(len(peak)):
-				if popendiffstdamp[index] > (i * popendiffpeak[index]):
-					delete = index
-			if delete != np.nan:
-				peak = np.delete(peak, delete)
-				delete = np.nan
-				popendiffpeak = calpopendiffpeak(dwell, peak)
-				popendiffstdamp = std[peak] / np.sqrt(1.0/12)
+		delete = np.where(popendiffstdamp > (i * popendiffpeak))[0]
+		while np.any(delete):
+			peak = np.delete(peak, delete[0])
+			popendiffpeak = calpopendiffpeak(dwell, peak)
+			popendiffstdamp = std[peak] / np.sqrt(1.0/12)
+			delete = np.where(popendiffstdamp > (i * popendiffpeak))[0]
 
 	for i in [0.7]:
-		delete = np.nan
-		while np.any(popendiffstdamp < (i * popendiffpeak)):
-			for index in range(len(peak)):
-				if popendiffstdamp[index] < (i * popendiffpeak[index]):
-					delete = index
-			if delete != np.nan:
-				peak = np.delete(peak, delete)
-				delete = np.nan
-				popendiffpeak = calpopendiffpeak(dwell, peak)
-				popendiffstdamp = std[peak] / np.sqrt(1.0/12)
+		delete = np.where(popendiffstdamp < (i * popendiffpeak))[0]
+		while np.any(delete):
+			peak = np.delete(peak, delete[0])
+			popendiffpeak = calpopendiffpeak(dwell, peak)
+			popendiffstdamp = std[peak] / np.sqrt(1.0/12)
+			delete = np.where(popendiffstdamp < (i * popendiffpeak))[0]
+			
 	return peak, popendiffstdamp, popendiffpeak
 
 def popenpeak(dwell, peak):
@@ -275,9 +313,75 @@ def popenpeak(dwell, peak):
 
 def filterpopendiff(peak, dwell, popendifflimit):
 	popen = popenpeak(dwell, peak)
-	delete = np.where(popen < popendifflimit)[0]
-	peak = np.delete(peak, delete)
+	popendiff = np.diff(popen)
+	while np.any(abs(popendiff) < popendifflimit):
+		delete = np.nan
+		for index in range(len(peak)):
+			if abs(popendiff[index]) < popendifflimit:
+				delete = index
+
+		peak = np.delete(peak, delete)
+		popen = popenpeak(dwell, peak)
+		popendiff = np.diff(popen)
+
 	return peak
+
+'''def prepare_hist(X, tres):
+	n=len(X)
+	if n <= 300:
+		nbdec = 5.0
+	elif n <= 1000:
+		nbdec = 8.0
+	elif n <= 3000:
+		nbdec = 10.0
+	else:
+		nbdec = 12.0
+	logx = np.log(X)
+	bins = np.arange(np.log(tres), np.amax(logx) + np.log(10)/nbdec, np.log(10)/nbdec)
+	hist, bin_edges = np.histogram(logx, bins = bins)
+	plothist = np.hstack((0, np.repeat(hist, 2), 0)).astype(float)
+	plotbin_edges = np.repeat(np.exp(bin_edges), 2)
+	return plotbin_edges, plothist'''
+
+def plothist(plotdwellopen, plotdwellclose, begin, close):
+	n=len(plotdwellopen)
+	if n <= 300:
+		nbdec = 5.0
+	elif n <= 1000:
+		nbdec = 8.0
+	elif n <= 3000:
+		nbdec = 10.0
+	else:
+		nbdec = 12.0
+	logx = np.log(plotdwellopen)
+	if (np.amax(logx) + np.log(10)/nbdec) > np.log(0.1):
+		bins = np.arange(np.log(0.1), np.amax(logx) + np.log(10)/nbdec, np.log(10)/nbdec)
+		plt.hist(logx, bins = bins)
+		plt.title(savefilename + ' ' + str(begin) + '-' + str(close) + ' open histgram')
+		plt.savefig(pathfilename + '_' + str(begin) + '-' + str(close) + '_open_histgram' + '.png',dpi=300)
+		plt.close()
+		print savefilename, str(begin) + '-' + str(close), 'Open Histogram saved.'
+
+	n=len(plotdwellclose)
+	if n <= 300:
+		nbdec = 5.0
+	elif n <= 1000:
+		nbdec = 8.0
+	elif n <= 3000:
+		nbdec = 10.0
+	else:
+		nbdec = 12.0
+	logx = np.log(plotdwellclose)
+	if (np.amax(logx) + np.log(10)/nbdec) > np.log(0.1):
+		bins = np.arange(np.log(0.1), np.amax(logx) + np.log(10)/nbdec, np.log(10)/nbdec)
+		plt.hist(logx, bins = bins)
+		plt.title(savefilename + ' ' + str(begin) + '-' + str(close) + ' close histgram')
+		plt.savefig(pathfilename + '_' + str(begin) + '-' + str(close) + '_close_histgram' + '.png',dpi=300)
+		plt.close()
+		print savefilename, str(begin) + '-' + str(close), 'Close Histogram saved.'
+
+
+
 
 
 
@@ -336,8 +440,8 @@ for filename in filenamelist:
 	end = 50.25
 	popendifflimit = 0.05
 	if os.path.exists(pathfilename+'step.npy') == False:
-		processlist = np.array_split(np.arange(start,end,jump*2), multiprocessing.cpu_count())
 
+		processlist = np.array_split(np.arange(start,end,jump*2), multiprocessing.cpu_count())
 		if __name__ == '__main__':
 			jobs = []
 			for time in processlist[1:]:
@@ -355,6 +459,7 @@ for filename in filenamelist:
 			window += jump*2
 			print 'testing interval:', window, 'ms'
 			ma = convertma(dwell, window, jump)
+
 			interval = window / jump
 			std = movstd(ma, interval)
 			oripeak = signal.find_peaks_cwt(std, np.arange(interval * percentage, interval, interval*0.05))
@@ -437,6 +542,7 @@ for filename in filenamelist:
 				firstpeak = np.array([])
 				lastpeak = np.array([])
 				for window in np.arange(50.25,80.25,0.25):
+					print 'Calculating last peak from window', window, 'ms'
 					ma = convertma(dwell, window, jump)
 					interval = window / jump
 					std = movstd(ma, interval)
@@ -477,6 +583,7 @@ for filename in filenamelist:
 		for time in processlist:
 			time = time.astype(int)
 			p = multiprocessing.Process(target=calculatepeak, args=(time, jump, dwell))
+
 			jobs.append(p)
 			p.start()
 
@@ -545,21 +652,39 @@ for filename in filenamelist:
 
 	csvpeak = np.array([])
 	split = np.hstack((0, np.where(sortsumpeakdiff>limit)[0] + 1, len(sortsumpeak)))
+
 	for index in np.arange(len(split)-1):
-		if (split[index + 1] - split[index]) > 10:
+		if (split[index + 1] - split[index]) > 15:
 			csvpeak = np.append(csvpeak, np.mean(sortsumpeak[split[index]: split[index + 1]]))
 	csvpeak = csvpeak.astype(np.int64)
-	print csvpeak
+
 	csvpeak = filterpopendiff(csvpeak, dwell, popendifflimit)
-	print csvpeak
+
 	peak = csvpeak.copy()
 	start, end, amp, dwell = np.loadtxt(filename, delimiter=',',usecols=(4,5,6,8),unpack=True)
 	csvpeak = np.hstack((csvpeak.astype(np.int64), np.cumsum(dwell)[-1]/jump - 1))
 	popen = popenpeak(dwell, peak)
 	csvstart = np.hstack((0, peak.astype(float)))*jump + start[0]
 	csvend = np.hstack((peak.astype(float), np.cumsum(dwell)[-1]/jump-1))*jump + start[0]
-	csvtext = np.transpose(np.vstack((csvpeak, csvstart, csvend, popen)))
+	meanopentime = np.array([])
+	meanclosetime = np.array([])
+	plotcsvpeak = np.append(0, csvpeak)*jump
+	cumsum = np.cumsum(dwell)/jump
+	if len(plotcsvpeak) > 1:
+		for index in np.arange(1, len(plotcsvpeak)):
+			rangehist = (cumsum>plotcsvpeak[index-1]) & (cumsum<plotcsvpeak[index])
+			plothist(dwell[rangehist & (np.arange(len(dwell))%2==0)], dwell[rangehist & (np.arange(len(dwell))%2!=0)], plotcsvpeak[index-1], plotcsvpeak[index])
+			meanopentime = np.append(meanopentime, np.mean(dwell[rangehist & (np.arange(len(dwell))%2==0)]))
+			meanclosetime = np.append(meanclosetime, np.mean(dwell[rangehist & (np.arange(len(dwell))%2!=0)]))
+	csvtext = np.transpose(np.vstack((csvpeak, csvstart, csvend, popen, meanopentime, meanclosetime)))
 	np.savetxt(pathfilename+'.csv', csvtext, delimiter=',')
+
+	plotcsvpeak = np.append(0, csvpeak)*jump
+	cumsum = np.cumsum(dwell)/jump
+	if len(plotcsvpeak) > 1:
+		for index in np.arange(1, len(plotcsvpeak)):
+			rangehist = (cumsum>plotcsvpeak[index-1]) & (cumsum<plotcsvpeak[index])
+			plothist(dwell[rangehist & (np.arange(len(dwell))%2==0)], dwell[rangehist & (np.arange(len(dwell))%2!=0)], plotcsvpeak[index-1], plotcsvpeak[index])
 
 	plotpeak = np.hstack((0, peak, peak + 1, np.cumsum(dwell)[-1]/jump-1))
 	plotpeak = np.sort(plotpeak)*jump
